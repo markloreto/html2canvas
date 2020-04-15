@@ -9,6 +9,8 @@ import {
     isSelectElement,
     isStyleElement,
     isSVGElementNode,
+    isSlotElement,
+    isCustomElement,
     isTextareaElement,
     isTextNode
 } from './node-parser';
@@ -18,6 +20,7 @@ import {TokenType} from '../css/syntax/tokenizer';
 import {CounterState, createCounterText} from '../css/types/functions/counter';
 import {LIST_STYLE_TYPE, listStyleType} from '../css/property-descriptors/list-style-type';
 import {CSSParsedCounterDeclaration, CSSParsedPseudoDeclaration} from '../css/index';
+import {nodeListToArr} from '../core/util';
 import {getQuote} from '../css/property-descriptors/quotes';
 
 export interface CloneOptions {
@@ -128,7 +131,27 @@ export class DocumentCloner {
             return this.createStyleClone(node);
         }
 
+        if (isCustomElement(node)) {
+            return this.createCustomElementClone(node);
+        }
+
+
         return node.cloneNode(false) as HTMLElement;
+    }
+
+    // custom elements are cloned as divs so the renderer knows how to render them
+    createCustomElementClone(node: HTMLElement): HTMLElement {
+        let customDiv = document.createElement('div');
+        if (typeof node.getAttributeNames === 'function') {
+            let attrNames = node.getAttributeNames();
+            for (let i = 0; i < attrNames.length; i += 1) {
+                let attrName = attrNames[i];
+                let attrValue = node.getAttribute(attrName) as string;
+                customDiv.setAttribute(attrName, attrValue);
+            }
+        }
+
+        return customDiv as HTMLElement;
     }
 
     createStyleClone(node: HTMLStyleElement): HTMLStyleElement {
@@ -274,7 +297,18 @@ export class DocumentCloner {
             const counters = this.counters.parse(new CSSParsedCounterDeclaration(style));
             const before = this.resolvePseudoContent(node, clone, styleBefore, PseudoElementType.BEFORE);
 
-            for (let child = node.firstChild; child; child = child.nextSibling) {
+            let children = node.shadowRoot ? nodeListToArr(node.shadowRoot.childNodes) : nodeListToArr(node.childNodes);
+            for (let i = 0; i < children.length; i++) {
+                let child = children[i] as Node;
+                if (isSlotElement(child)) {
+                    let assignedNodes = child.assignedNodes() as ChildNode[];
+                    if (assignedNodes.length > 0) {
+                        // replace the slot element with its assigned nodes, and then process them immediately
+                        children.splice(i, 1, ...assignedNodes);
+                        i -= 1;
+                        continue;
+                    }
+                }
                 if (
                     !isElementNode(child) ||
                     (!isScriptElement(child) &&
